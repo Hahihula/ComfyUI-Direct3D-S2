@@ -316,7 +316,7 @@ class Direct3DS2Pipeline(object):
         return outputs
         
     def init_refiner(self):
-        state_dict_refiner = torch.load(self.model_refiner_path, map_location='cpu', weights_only=True)
+        state_dict_refiner = torch.load(self.model_refiner_path, map_location='cpu', weights_only=False)
         self.refiner = instantiate_from_config(self.cfg.refiner)
         self.refiner.load_state_dict(state_dict_refiner["refiner"], strict=True)
         self.refiner.eval()
@@ -324,7 +324,7 @@ class Direct3DS2Pipeline(object):
         self.refiner.to(self.device)
         
     def init_refiner_1024(self):
-        state_dict_refiner_1024 = torch.load(self.model_refiner_1024_path, map_location='cpu', weights_only=True)
+        state_dict_refiner_1024 = torch.load(self.model_refiner_1024_path, map_location='cpu', weights_only=False)
         self.refiner_1024 = instantiate_from_config(self.cfg.refiner_1024)
         self.refiner_1024.load_state_dict(state_dict_refiner_1024["refiner"], strict=True)
         self.refiner_1024.eval()
@@ -332,7 +332,7 @@ class Direct3DS2Pipeline(object):
         self.refiner_1024.to(self.device)
 
     def init_sparse_512(self):
-        state_dict_sparse_512 = torch.load(self.model_sparse_512_path, map_location='cpu', weights_only=True)
+        state_dict_sparse_512 = torch.load(self.model_sparse_512_path, map_location='cpu', weights_only=False)
         self.sparse_vae_512 = instantiate_from_config(self.cfg.sparse_vae_512) 
         self.sparse_vae_512.load_state_dict(state_dict_sparse_512["vae"], strict=True)
         self.sparse_vae_512.eval()
@@ -348,7 +348,7 @@ class Direct3DS2Pipeline(object):
         self.sparse_image_encoder.to(self.device)
         
     def init_sparse_1024(self):
-        state_dict_sparse_1024 = torch.load(self.model_sparse_1024_path, map_location='cpu', weights_only=True)
+        state_dict_sparse_1024 = torch.load(self.model_sparse_1024_path, map_location='cpu', weights_only=False)
         self.sparse_vae_1024 = instantiate_from_config(self.cfg.sparse_vae_1024)                                        
         self.sparse_vae_1024.load_state_dict(state_dict_sparse_1024["vae"], strict=True)
         self.sparse_vae_1024.eval()
@@ -364,7 +364,7 @@ class Direct3DS2Pipeline(object):
         self.sparse_image_encoder.to(self.device)
         
     def init_dense(self):
-        state_dict_dense = torch.load(self.model_dense_path, map_location='cpu', weights_only=True)
+        state_dict_dense = torch.load(self.model_dense_path, map_location='cpu', weights_only=False)
         self.dense_vae = instantiate_from_config(self.cfg.dense_vae)
         self.dense_vae.load_state_dict(state_dict_dense["vae"], strict=True)
         self.dense_vae.eval()

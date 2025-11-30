@@ -129,65 +129,64 @@ def _get_attention_score(
     max_seqlen_q: int,
     max_seqlen_k: int,
     sm_scale: float,
-) -> torch.Tensor:
-    # dtype check
-    assert q.dtype == torch.bfloat16 or q.dtype == torch.float16
-    assert q.dtype == k.dtype
-    assert cu_seqlens_q.dtype == torch.int32 and cu_seqlens_k.dtype == torch.int32
-    assert lse.dtype == torch.float32
-    # shape
-    q_len, num_q_heads, head_dim = q.shape
-    k_len, num_k_heads, head_dim = k.shape
-    batch_size = cu_seqlens_q.shape[0] - 1
-    assert q_len > k_len
+):
+    """
+    Pure PyTorch implementation to avoid Triton segfaults.
+    Memory-efficient version using einsum.
+    """
+    import torch
+    import torch.nn.functional as F
+    
+    num_q_heads = q.shape[1]
+    num_k_heads = k.shape[1]
+    head_dim = q.shape[2]
+    total_query_len = q.shape[0]
+    total_key_len = k.shape[0]
+    
+    # Use standard scaling if sm_scale is None
     if sm_scale is None:
-        sm_scale = 1 / math.sqrt(head_dim)
-    # gqa
+        sm_scale = 1.0 / (head_dim ** 0.5)
+    
+    # For GQA: reshape q to group by kv heads
     assert num_q_heads % num_k_heads == 0
-    num_share_q_heads = num_q_heads // num_k_heads
-    # init score
-    score = torch.zeros(
-        num_k_heads, q_len, max_seqlen_k, dtype=torch.float32, device=q.device
-    )
-    # launch kernel
-    grid = lambda META: (
-        batch_size * num_k_heads,
-        triton.cdiv(max_seqlen_q, META["BLOCK_SIZE_Q"]),
-        triton.cdiv(max_seqlen_k, META["BLOCK_SIZE_K"]),
-    )
-    num_warps = 4 if head_dim <= 64 else 8
-    num_stages = 3
-    BLOCK_SIZE_Q = 128
-    BLOCK_SIZE_K = 128
-    BLOCK_SIZE_D = triton.next_power_of_2(head_dim)
-    score_kernel[grid](
-        q,
-        k,
-        lse,
-        score,
-        cu_seqlens_q,
-        cu_seqlens_k,
-        num_k_heads,
-        num_share_q_heads,
-        head_dim,
-        sm_scale,
-        q.stride(0),
-        q.stride(1),
-        q.stride(2),
-        k.stride(0),
-        k.stride(1),
-        k.stride(2),
-        lse.stride(0),
-        lse.stride(1),
-        score.stride(0),
-        score.stride(1),
-        score.stride(2),
-        BLOCK_SIZE_Q=BLOCK_SIZE_Q,
-        BLOCK_SIZE_K=BLOCK_SIZE_K,
-        BLOCK_SIZE_D=BLOCK_SIZE_D,
-        num_warps=num_warps,
-        num_stages=num_stages,
-    )
+    n_rep = num_q_heads // num_k_heads
+    
+    # Reshape q: [total_query_len, num_k_heads, n_rep, head_dim]
+    q_grouped = q.view(total_query_len, num_k_heads, n_rep, head_dim)
+    
+    # Average across the n_rep dimension to get one query per kv head
+    # [total_query_len, num_k_heads, head_dim]
+    q_avg = q_grouped.mean(dim=2)
+    
+    # Transpose for batched matmul: [num_k_heads, total_query_len, head_dim]
+    q_t = q_avg.transpose(0, 1)
+    
+    # Transpose k: [num_k_heads, total_key_len, head_dim]
+    k_t = k.transpose(0, 1)
+    
+    # Batched matrix multiplication: [num_k_heads, total_query_len, total_key_len]
+    score = torch.bmm(q_t, k_t.transpose(1, 2)) * sm_scale
+    
+    # Apply softmax per batch element to avoid cross-contamination
+    batch_size = len(cu_seqlens_q) - 1
+    for b in range(batch_size):
+        q_start = cu_seqlens_q[b].item()
+        q_end = cu_seqlens_q[b + 1].item()
+        k_start = cu_seqlens_k[b].item()
+        k_end = cu_seqlens_k[b + 1].item()
+        
+        # Mask out invalid positions (outside this batch)
+        score[:, :q_start, k_start:k_end] = float('-inf')
+        score[:, q_end:, k_start:k_end] = float('-inf')
+        score[:, q_start:q_end, :k_start] = float('-inf')
+        score[:, q_start:q_end, k_end:] = float('-inf')
+        
+        # Apply softmax within this batch
+        score[:, q_start:q_end, k_start:k_end] = F.softmax(
+            score[:, q_start:q_end, k_start:k_end], 
+            dim=-1
+        )
+    
     return score
 
 
@@ -226,6 +225,7 @@ def get_block_score(
     for b in range(batch_size):
         q_start, q_end, q_len = cu_seqlens[b], cu_seqlens[b + 1], seqlens[b]
 
+        
         compressed_k_start, compressed_k_end = compressed_cu_seqlens[b], compressed_cu_seqlens[b + 1]
         attn_score_b = attn_score[:, q_start: q_end, :(compressed_k_end-compressed_k_start)]
         compressed_block_coords_b = deepcopy(compressed_k.coords[compressed_k_start: compressed_k_end])

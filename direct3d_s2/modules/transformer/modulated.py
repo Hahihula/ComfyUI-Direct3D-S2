@@ -68,7 +68,7 @@ class ModulatedTransformerBlock(nn.Module):
 
     def forward(self, x: torch.Tensor, mod: torch.Tensor) -> torch.Tensor:
         if self.use_checkpoint:
-            return torch.utils.checkpoint.checkpoint(self._forward, x, mod, use_reentrant=False)
+            return self._forward(x, mod, context)
         else:
             return self._forward(x, mod)
 
